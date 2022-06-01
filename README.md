@@ -9,4 +9,4 @@ information to __afl_area_ptr[__afl_map_size]
 
 # Note:
 - template is taken from AFLplusplus github
-
+- licence copied from AFLplusplus repo: https://github.com/AFLplusplus/AFLplusplus
