@@ -233,7 +233,7 @@ int init_bind_shell_connection() {
   memset(&serv_addr_bind_shell, '0', sizeof(serv_addr_bind_shell));
 
   serv_addr_bind_shell.sin_family = AF_INET;
-  serv_addr_bind_shell.sin_port = htons(1080);
+  serv_addr_bind_shell.sin_port = htons(1081);
 
   if (inet_pton(AF_INET, "127.0.0.1", &serv_addr_bind_shell.sin_addr) <= 0) {
     printf("\n inet_pton error occured\n");
@@ -389,13 +389,24 @@ static void __afl_end_testcase(void) {
 
 int main(int argc, char *argv[]) {
   /* This is were the testcase data is written into */
-  u8  buf[1024];  // this is the maximum size for a test case! set it!
-  s32 len;
+  u8      buf[1024];  // this is the maximum size for a test case! set it!
+  s32     len;
+  clock_t t;
 
+  t = clock();
   init_qmp_communication();
+  t = clock() - t;
+  double time_taken = ((double)t) / CLOCKS_PER_SEC;
+  printf("init_qmp_communication: %f s\n", time_taken);
+  t = clock();
 
   init_bitmap_socket();
+  t = clock() - t;
+  time_taken = ((double)t) / CLOCKS_PER_SEC;
+  printf("init_bitmap_socket: %f s\n", time_taken);
+  t = clock();
 
+  init_bind_shell_connection();
 
   /* here you specify the map size you need that you are reporting to
      afl-fuzz.  Any value is fine as long as it can be divided by 32. */
@@ -411,58 +422,88 @@ int main(int argc, char *argv[]) {
   //  char *endCommand = "done1234";
   char sendBuffer[BUFF_LEN];
   printf("Start testcases");
-  int status;
+  clock_t t2;
+  int     status;
   while ((len = __afl_next_testcase(buf, sizeof(buf))) > 0) {
-    printf("Start testcase\n");
-    init_bind_shell_connection();
+    if (len > 0) {  // the minimum data size you need for the target
 
-    /* here you have to create the magic that feeds the buf/len to the
-       target and write the coverage to __afl_area_ptr */
+      /* here you have to create the magic that feeds the buf/len to the
+         target and write the coverage to __afl_area_ptr */
 
-    // ... the magic ...
+      // ... the magic ...
+      t2 = clock();
 
-    // first we send command to QEMU to start recording
-    start_qmp_command();
-    printf("Start qmp\n");
-    memset(sendBuffer, 0, BUFF_LEN);
-    //      strcat(sendBuffer, echoRead);
-    //      buf[strcspn(buf, "\n")] = 0;
-    strcat(sendBuffer, buf);
-    //      strcat(sendBuffer, command);
+      // first we send command to QEMU to start recording
+      t = clock();
+      start_qmp_command();
+      t = clock() - t;
+      time_taken = ((double)t) / CLOCKS_PER_SEC;
+      printf("start_qmp_command: %f s\n", time_taken);
 
-    //      strcat(sendBuffer, end_command);
-    printf("===========================\n");
-    printf("%s", sendBuffer);
-    printf("===========================\n");
+      t = clock();
+      memset(sendBuffer, 0, BUFF_LEN);
+      //      strcat(sendBuffer, echoRead);
+      //      buf[strcspn(buf, "\n")] = 0;
+      strcat(sendBuffer, buf);
+      //      strcat(sendBuffer, command);
 
-    // send command to bind shell
-    size_t write_result =
-        write(sockfd_bind_shell, sendBuffer, strlen(sendBuffer));
-    printf("Sent command\n");
-    char rcvBuff[BUFF_LEN];
-    int  n;
-    while (1) {
-      if ((n = read(sockfd_bind_shell, rcvBuff, sizeof(rcvBuff))) > 0) {
-        break;
+      //      strcat(sendBuffer, end_command);
+      printf("===========================\n");
+      printf("%s", sendBuffer);
+      printf("===========================\n");
+
+      // send command to bind shell
+      size_t write_result =
+          write(sockfd_bind_shell, sendBuffer, strlen(sendBuffer));
+      t = clock() - t;
+      time_taken = ((double)t) / CLOCKS_PER_SEC;
+      printf("time taken to send command to shell: %f s\n", time_taken);
+
+      t = clock();
+      char rcvBuff[BUFF_LEN];
+      int  n;
+      while (1) {
+        if ((n = read(sockfd_bind_shell, rcvBuff, sizeof(rcvBuff))) > 0) {
+          break;
+        }
       }
+      t = clock() - t;
+      time_taken = ((double)t) / CLOCKS_PER_SEC;
+      printf("time taken to rcv status: %f s\n", time_taken);
+
+      status = atoi(rcvBuff);
+      printf("Status is: %d\n", status);
+      printf("Status is(string): %s\n", rcvBuff);
+
+      t = clock();
+      save_hmp_command();
+      t = clock() - t;
+      time_taken = ((double)t) / CLOCKS_PER_SEC;
+      printf("time taken to send qmp cmd: %f s\n", time_taken);
+
+      t = clock();
+      accept_bitmap();
+      t = clock() - t;
+      time_taken = ((double)t) / CLOCKS_PER_SEC;
+      printf("time taken to rcv bitmap: %f s\n", time_taken);
+
+      t = clock();
+      for (int i = 0; i < MAP_SIZE; i++) {
+        __afl_area_ptr[i] = bitmap[i];
+      }
+      t = clock() - t;
+      time_taken = ((double)t) / CLOCKS_PER_SEC;
+      printf("time taken to copy bitmap: %f s\n", time_taken);
+
+      memset(bitmap, '0', sizeof(bitmap));
     }
-
-    status = atoi(rcvBuff);
-    printf("Status is: %d\n", status);
-
-    save_hmp_command();
-
-    accept_bitmap();
-
-    for (int i = 0; i < MAP_SIZE; i++) {
-      __afl_area_ptr[i] = bitmap[i];
-    }
-
-    memset(bitmap, '0', sizeof(bitmap));
     if (status != 0) { send_forkserver_error(status); }
 
     /* report the test case is done and wait for the next */
     __afl_end_testcase();
+    t2 = clock() - t2;
+    double total_time = ((double)t2) / CLOCKS_PER_SEC;
+    printf("TOTAL TIME: %f s \n", total_time);
   }
 
   return 0;
