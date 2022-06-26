@@ -242,7 +242,7 @@ int init_bind_shell_connection() {
 
   if (connect(sockfd_bind_shell, (struct sockaddr *)&serv_addr_bind_shell,
               sizeof(serv_addr_bind_shell)) < 0) {
-    printf("\n Error : Connect Failed \n");
+    printf("\n Error : Connect Failed (Bind shell connection) \n");
     return 1;
   }
 
@@ -253,10 +253,10 @@ int init_bind_shell_connection() {
 
 void send_forkserver_error(int error) {
   u32 status;
-  if (!error || error > 0xffff) {
-    printf("Prvi return errrora");
-    return;
-  }
+//  if (!error || error > 0xffff) {
+//    printf("Prvi return errrora");
+//    return;
+//  }
   status = (FS_OPT_ERROR | FS_OPT_SET_ERROR(error));
   if (write(FORKSRV_FD + 1, (char *)&status, 4) != 4) {
     printf("Drugi return errora");
@@ -379,11 +379,26 @@ static u32 __afl_next_testcase(u8 *buf, u32 max_len) {
   return status;
 }
 
-static void __afl_end_testcase(void) {
-  int status = 0xffffff;
-
+static void __afl_end_testcase(int status) {
+//  int status = 0xffffff;
+//
+//  if (write(FORKSRV_FD + 1, &status, 4) != 4) exit(1);
+//
   if (write(FORKSRV_FD + 1, &status, 4) != 4) exit(1);
 }
+
+enum afl_child_ret {
+
+  // Persistent
+  AFL_CHILD_NEXT,
+  // Crash discovered but still alive in persistent mode
+  AFL_CHILD_FOUND_CRASH,
+  // Read again, one afl_tsl struct.
+  AFL_CHILD_TSL_REQUEST,
+  // Child no longer there. Read status code.
+  AFL_CHILD_EXITED,
+
+};
 
 /* you just need to modify the while() loop in this main() */
 
@@ -391,11 +406,10 @@ int main(int argc, char *argv[]) {
   /* This is were the testcase data is written into */
   u8  buf[1024];  // this is the maximum size for a test case! set it!
   s32 len;
-
+  int cnt = 0;
   init_qmp_communication();
 
   init_bitmap_socket();
-
 
   /* here you specify the map size you need that you are reporting to
      afl-fuzz.  Any value is fine as long as it can be divided by 32. */
@@ -411,58 +425,85 @@ int main(int argc, char *argv[]) {
   //  char *endCommand = "done1234";
   char sendBuffer[BUFF_LEN];
   printf("Start testcases");
-  int status;
+  init_bind_shell_connection();
+  int     status;
+  char    rcvBuff[BUFF_LEN];
+  clock_t begin;
+  enum afl_child_ret msg = AFL_CHILD_FOUND_CRASH;
   while ((len = __afl_next_testcase(buf, sizeof(buf))) > 0) {
-    printf("Start testcase\n");
-    init_bind_shell_connection();
+    if (len > 1 && buf[0] != 0) {
+      buf[len] = '\0';
+      printf("Start testcase: %d\n", cnt++);
 
-    /* here you have to create the magic that feeds the buf/len to the
-       target and write the coverage to __afl_area_ptr */
+      /* here you have to create the magic that feeds the buf/len to the
+         target and write the coverage to __afl_area_ptr */
 
-    // ... the magic ...
+      // ... the magic ...
 
-    // first we send command to QEMU to start recording
-    start_qmp_command();
-    printf("Start qmp\n");
-    memset(sendBuffer, 0, BUFF_LEN);
-    //      strcat(sendBuffer, echoRead);
-    //      buf[strcspn(buf, "\n")] = 0;
-    strcat(sendBuffer, buf);
-    //      strcat(sendBuffer, command);
+      // first we send command to QEMU to start recording
+      start_qmp_command();
+      printf("Start qmp\n");
+      //    memset(sendBuffer, 0, BUFF_LEN);
+      //    //      strcat(sendBuffer, echoRead);
+      //    //      buf[strcspn(buf, "\n")] = 0;
+      //    strcat(sendBuffer, buf);
+      //    //      strcat(sendBuffer, command);
+      //
+      //    //      strcat(sendBuffer, end_command);
+      // buf[0] = 0xff;
+      printf("===========================\n");
+      printf("Len: %d: [%d, %d, %d, %d, %d...]\n", len, buf[0], buf[1], buf[2],
+             buf[3], buf[4]);
+      printf("%s", buf);
+      printf("===========================\n");
 
-    //      strcat(sendBuffer, end_command);
-    printf("===========================\n");
-    printf("%s", sendBuffer);
-    printf("===========================\n");
-
-    // send command to bind shell
-    size_t write_result =
-        write(sockfd_bind_shell, sendBuffer, strlen(sendBuffer));
-    printf("Sent command\n");
-    char rcvBuff[BUFF_LEN];
-    int  n;
-    while (1) {
-      if ((n = read(sockfd_bind_shell, rcvBuff, sizeof(rcvBuff))) > 0) {
-        break;
+      //    // send command to bind shell
+      size_t write_result = write(sockfd_bind_shell, buf, strlen(buf));
+      printf("Sent command\n");
+      int n;
+      memset(rcvBuff, 0, BUFF_LEN);
+      begin = clock();
+      while (1) {
+        if ((n = read(sockfd_bind_shell, rcvBuff, sizeof(rcvBuff))) > 0) {
+          break;
+        }
+        if (((double)(clock() - begin) / CLOCKS_PER_SEC) > 0.5) {
+          printf("Timeout, send again!");
+          begin = clock();
+          size_t write_result = write(sockfd_bind_shell, buf, strlen(buf));
+        }
       }
+      ////    close(sockfd_bind_shell);
+      status = atoi(rcvBuff);
+      ////    status = 0;
+      printf("Status is: %d\n", status);
+
+      save_hmp_command();
+
+      accept_bitmap();
+
+      strncpy(__afl_area_ptr, bitmap, MAP_SIZE);
+//      if (status != 0) {
+//        return 127;
+//        send_forkserver_error(2);
+//      }
+//        printf("Sending status to fork!\n");
+//        status = 0x00010000;
+//        if (write(FORKSRV_FD + 1, &status, 4) != 4) exit(1);
+//      }
+      //    for (int i = 0; i < MAP_SIZE; i++) {
+      //      __afl_area_ptr[i] = bitmap[i];
+      //    }
+
+      memset(bitmap, '0', sizeof(bitmap));
+      memset(buf, '0', sizeof(buf));
     }
-
-    status = atoi(rcvBuff);
-    printf("Status is: %d\n", status);
-
-    save_hmp_command();
-
-    accept_bitmap();
-
-    for (int i = 0; i < MAP_SIZE; i++) {
-      __afl_area_ptr[i] = bitmap[i];
-    }
-
-    memset(bitmap, '0', sizeof(bitmap));
-    if (status != 0) { send_forkserver_error(status); }
-
     /* report the test case is done and wait for the next */
-    __afl_end_testcase();
+    if (status != 0) {
+      __afl_end_testcase(137);
+    } else {
+      __afl_end_testcase(0);
+    }
   }
 
   return 0;
