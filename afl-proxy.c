@@ -253,13 +253,11 @@ int init_bind_shell_connection() {
 
 void send_forkserver_error(int error) {
   u32 status;
-//  if (!error || error > 0xffff) {
-//    printf("Prvi return errrora");
-//    return;
-//  }
+  if (!error || error > 0xffff) {
+    return;
+  }
   status = (FS_OPT_ERROR | FS_OPT_SET_ERROR(error));
   if (write(FORKSRV_FD + 1, (char *)&status, 4) != 4) {
-    printf("Drugi return errora");
     return;
   }
 }
@@ -387,19 +385,6 @@ static void __afl_end_testcase(int status) {
   if (write(FORKSRV_FD + 1, &status, 4) != 4) exit(1);
 }
 
-enum afl_child_ret {
-
-  // Persistent
-  AFL_CHILD_NEXT,
-  // Crash discovered but still alive in persistent mode
-  AFL_CHILD_FOUND_CRASH,
-  // Read again, one afl_tsl struct.
-  AFL_CHILD_TSL_REQUEST,
-  // Child no longer there. Read status code.
-  AFL_CHILD_EXITED,
-
-};
-
 /* you just need to modify the while() loop in this main() */
 
 int main(int argc, char *argv[]) {
@@ -408,7 +393,7 @@ int main(int argc, char *argv[]) {
   s32 len;
   int cnt = 0;
   init_qmp_communication();
-
+  init_bind_shell_connection();
   init_bitmap_socket();
 
   /* here you specify the map size you need that you are reporting to
@@ -419,63 +404,37 @@ int main(int argc, char *argv[]) {
   __afl_map_shm();
   __afl_start_forkserver();
 
-  //  char *command = "\"| ./test1";
-  //  char *echoRead = "echo \"";
-  //  char *end_command = " ; echo \"\\n$?\" ; echo done1234\n";
-  //  char *endCommand = "done1234";
-  char sendBuffer[BUFF_LEN];
+
   printf("Start testcases");
-  init_bind_shell_connection();
   int     status;
   char    rcvBuff[BUFF_LEN];
   clock_t begin;
-  enum afl_child_ret msg = AFL_CHILD_FOUND_CRASH;
   while ((len = __afl_next_testcase(buf, sizeof(buf))) > 0) {
     if (len > 1 && buf[0] != 0) {
       buf[len] = '\0';
       printf("Start testcase: %d\n", cnt++);
 
-      /* here you have to create the magic that feeds the buf/len to the
-         target and write the coverage to __afl_area_ptr */
-
-      // ... the magic ...
-
       // first we send command to QEMU to start recording
       start_qmp_command();
       printf("Start qmp\n");
-      //    memset(sendBuffer, 0, BUFF_LEN);
-      //    //      strcat(sendBuffer, echoRead);
-      //    //      buf[strcspn(buf, "\n")] = 0;
-      //    strcat(sendBuffer, buf);
-      //    //      strcat(sendBuffer, command);
-      //
-      //    //      strcat(sendBuffer, end_command);
-      // buf[0] = 0xff;
+
       printf("===========================\n");
       printf("Len: %d: [%d, %d, %d, %d, %d...]\n", len, buf[0], buf[1], buf[2],
              buf[3], buf[4]);
       printf("%s", buf);
       printf("===========================\n");
 
-      //    // send command to bind shell
+      // send command to bind shell
       size_t write_result = write(sockfd_bind_shell, buf, strlen(buf));
       printf("Sent command\n");
       int n;
       memset(rcvBuff, 0, BUFF_LEN);
-      begin = clock();
       while (1) {
         if ((n = read(sockfd_bind_shell, rcvBuff, sizeof(rcvBuff))) > 0) {
           break;
         }
-        if (((double)(clock() - begin) / CLOCKS_PER_SEC) > 0.5) {
-          printf("Timeout, send again!");
-          begin = clock();
-          size_t write_result = write(sockfd_bind_shell, buf, strlen(buf));
-        }
       }
-      ////    close(sockfd_bind_shell);
       status = atoi(rcvBuff);
-      ////    status = 0;
       printf("Status is: %d\n", status);
 
       save_hmp_command();
@@ -483,17 +442,6 @@ int main(int argc, char *argv[]) {
       accept_bitmap();
 
       strncpy(__afl_area_ptr, bitmap, MAP_SIZE);
-//      if (status != 0) {
-//        return 127;
-//        send_forkserver_error(2);
-//      }
-//        printf("Sending status to fork!\n");
-//        status = 0x00010000;
-//        if (write(FORKSRV_FD + 1, &status, 4) != 4) exit(1);
-//      }
-      //    for (int i = 0; i < MAP_SIZE; i++) {
-      //      __afl_area_ptr[i] = bitmap[i];
-      //    }
 
       memset(bitmap, '0', sizeof(bitmap));
       memset(buf, '0', sizeof(buf));
